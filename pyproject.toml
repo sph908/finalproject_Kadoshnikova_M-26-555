@@ -1,0 +1,21 @@
+[project]
+name = "valutatrade-hub"
+version = "0.1.0"
+description = "Торговый хаб для операций с валютами"
+readme = "README.md"
+authors = [
+    { name = "Sofia Kadoshnikova", email = "sph908@yandex.ru" }
+]
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "ruff>=0.17.3",
+]
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "N", "UP", "B", "SIM"]
