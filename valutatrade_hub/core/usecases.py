@@ -1,18 +1,22 @@
 from datetime import datetime
 
 from valutatrade_hub.core import utils
-from valutatrade_hub.core.currencies import BASE_CURRENCY, exchange_rates
+from valutatrade_hub.core.currencies import BASE_CURRENCY
+from valutatrade_hub.core.exceptions import InsufficientFundsError
 from valutatrade_hub.core.models import Portfolio, User
-from valutatrade_hub.infra import database, settings
+from valutatrade_hub.decorators import log_action
+from valutatrade_hub.infra import settings
+from valutatrade_hub.infra.database import DATABASE
 
 SEPARATOR = "-" * 33
 
 
+@log_action("REGISTER")
 def register(username: str, password: str) -> str:
     """
     Создаёт нового пользователя и пустой портфель для него
     """
-    users = utils.load_jsondata(settings.USERS_FILE, [])
+    users = DATABASE.load_users()
     if any(saved["username"] == username for saved in users):
         raise ValueError(f"Имя пользователя '{username}' уже занято")
 
@@ -20,25 +24,14 @@ def register(username: str, password: str) -> str:
     user = User(user_id, username, "", "", datetime.now())
     user.change_password(password)
 
-    users.append({
+    DATABASE.save_user({
         "user_id": user.user_id,
         "username": user.username,
         "hashed_password": user.hashed_password,
         "salt": user.salt,
         "registration_date": user.registration_date.isoformat(),
     })
-    utils.save_jsondata(settings.USERS_FILE, users)
-
-    portfolio = Portfolio(user.user_id, {})
-    portfolios = utils.load_jsondata(settings.PORTFOLIOS_FILE, [])
-    portfolios.append({
-        "user_id": portfolio.user,
-        "wallets": {
-            code: {"balance": wallet.balance}
-            for code, wallet in portfolio.wallets.items()
-        },
-    })
-    utils.save_jsondata(settings.PORTFOLIOS_FILE, portfolios)
+    DATABASE.save_portfolio(Portfolio(user.user_id, {}))
 
     return (
         f"Пользователь '{user.username}' зарегистрирован (id={user.user_id}). "
@@ -46,11 +39,12 @@ def register(username: str, password: str) -> str:
     )
 
 
+@log_action("LOGIN")
 def login(username: str, password: str) -> User:
     """
     Проверяет пароль и возвращает объект вошедшего пользователя
     """
-    users = utils.load_jsondata(settings.USERS_FILE, [])
+    users = DATABASE.load_users()
     saved = next((s for s in users if s["username"] == username), None)
     if saved is None:
         raise ValueError(f"Пользователь '{username}' не найден")
@@ -72,19 +66,17 @@ def show_portfolio(user: User, base_currency: str | None = None) -> str:
     """
     Возвращает отчёт по кошелькам пользователя в указанной базовой валюте
     """
-    base = (base_currency or BASE_CURRENCY).strip().upper()
-    if base not in exchange_rates:
-        raise ValueError(f"Неизвестная базовая валюта '{base_currency}'")
+    base = utils.validate_currency_code(
+        base_currency or settings.SETTINGS.get("base_currency")
+    )
 
-    portfolio = database.load_portfolio(user.user_id)
+    portfolio = DATABASE.load_portfolio(user.user_id)
     if not portfolio.wallets:
         return f"Портфель пользователя '{user.username}' пуст"
 
     lines = [f"Портфель пользователя '{user.username}' (база: {base}):"]
     for code, wallet in portfolio.wallets.items():
-        if code not in exchange_rates:
-            raise ValueError(f"Неизвестен курс валюты {code}")
-        value = wallet.balance * exchange_rates[code] / exchange_rates[base]
+        value = utils.convert(wallet.balance, code, base)
         balance = (
             f"{wallet.balance:,.4f}"
             if 0 < wallet.balance < 1
@@ -96,6 +88,7 @@ def show_portfolio(user: User, base_currency: str | None = None) -> str:
     return "\n".join(lines)
 
 
+@log_action("BUY", verbose=True)
 def buy(user: User, currency_code: str, amount: float) -> str:
     """
     Покупает валюту и зачисляет её на кошелёк пользователя
@@ -103,21 +96,17 @@ def buy(user: User, currency_code: str, amount: float) -> str:
     if amount <= 0:
         raise ValueError("'amount' должен быть положительным числом")
 
-    code = currency_code.strip().upper()
-    if code not in exchange_rates:
-        raise ValueError(
-            f"Не удалось получить курс для {code}→{BASE_CURRENCY}"
-        )
-    rate = exchange_rates[code] / exchange_rates[BASE_CURRENCY]
+    code = utils.validate_currency_code(currency_code)
+    rate = utils.get_exchange_rate(code)
 
-    portfolio = database.load_portfolio(user.user_id)
+    portfolio = DATABASE.load_portfolio(user.user_id)
     if code not in portfolio.wallets:
         portfolio.add_currency(code)
     wallet = portfolio.get_wallet(code)
 
     before = wallet.balance
     wallet.deposit(amount)
-    database.save_portfolio(portfolio)
+    DATABASE.save_portfolio(portfolio)
 
     return "\n".join([
         f"Покупка выполнена: {amount:,.4f} {code} по курсу "
@@ -127,6 +116,8 @@ def buy(user: User, currency_code: str, amount: float) -> str:
         f"Оценочная стоимость покупки: {amount * rate:,.2f} {BASE_CURRENCY}",
     ])
 
+
+@log_action("SELL", verbose=True)
 def sell(user: User, currency_code: str, amount: float) -> str:
     """
     Продаёт валюту и списывает её с кошелька пользователя
@@ -134,30 +125,17 @@ def sell(user: User, currency_code: str, amount: float) -> str:
     if amount <= 0:
         raise ValueError("'amount' должен быть положительным числом")
 
-    code = currency_code.strip().upper()
-    if code not in exchange_rates:
-        raise ValueError(
-            f"Не удалось получить курс для {code}→{BASE_CURRENCY}"
-        )
-    rate = exchange_rates[code] / exchange_rates[BASE_CURRENCY]
+    code = utils.validate_currency_code(currency_code)
+    rate = utils.get_exchange_rate(code)
 
-    portfolio = database.load_portfolio(user.user_id)
+    portfolio = DATABASE.load_portfolio(user.user_id)
     if code not in portfolio.wallets:
-        raise ValueError(
-            f"У вас нет кошелька '{code}'. Добавьте валюту: "
-            f"она создаётся автоматически при первой покупке"
-        )
+        raise InsufficientFundsError(code, 0.0, amount)
 
     wallet = portfolio.get_wallet(code)
-    if amount > wallet.balance:
-        raise ValueError(
-            f"Недостаточно средств: доступно {wallet.balance:,.4f} {code}, "
-            f"требуется {amount:,.4f} {code}"
-        )
-
     before = wallet.balance
     wallet.withdraw(amount)
-    database.save_portfolio(portfolio)
+    DATABASE.save_portfolio(portfolio)
 
     return "\n".join([
         f"Продажа выполнена: {amount:,.4f} {code} по курсу "
@@ -167,9 +145,10 @@ def sell(user: User, currency_code: str, amount: float) -> str:
         f"Оценочная выручка: {amount * rate:,.2f} {BASE_CURRENCY}",
     ])
 
+
 def format_rate(rate: float) -> str:
     """
-    Печатает курс: мелкие значения с восемью знаками, остальные с двумя
+    Печатает курс
     """
     if 0 < rate < 1:
         return f"{rate:.8f}"
@@ -180,20 +159,14 @@ def get_rate(from_currency: str, to_currency: str) -> str:
     """
     Возвращает курс одной валюты к другой с отметкой времени обновления
     """
-    source = from_currency.strip().upper()
-    target = to_currency.strip().upper()
-    if not source or not target:
-        raise ValueError("Коды валют не должны быть пустыми")
+    source = utils.validate_currency_code(from_currency)
+    target = utils.validate_currency_code(to_currency)
 
-    cached = database.load_cached_rate(source, target)
+    cached = DATABASE.load_cached_rate(source, target)
     if cached is None:
-        if source not in exchange_rates or target not in exchange_rates:
-            raise ValueError(
-                f"Курс {source}→{target} недоступен. Повторите попытку позже."
-            )
-        rate = exchange_rates[source] / exchange_rates[target]
+        rate = utils.get_exchange_rate(source, target)
         updated_at = datetime.now()
-        database.save_cached_rate(source, target, rate, updated_at)
+        DATABASE.save_cached_rate(source, target, rate, updated_at)
     else:
         rate, updated_at = cached
 

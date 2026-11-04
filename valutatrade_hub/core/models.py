@@ -2,12 +2,13 @@ import hashlib
 import secrets
 from datetime import datetime
 
+from valutatrade_hub.core import utils
 from valutatrade_hub.core.currencies import (
     BASE_CURRENCY,
     MAX_CURRENCY_LENGTH,
     MIN_CURRENCY_LENGTH,
-    exchange_rates,
 )
+from valutatrade_hub.core.exceptions import InsufficientFundsError
 
 MIN_USERNAME_LENGTH = 3
 MIN_PASSWORD_LENGTH = 4
@@ -56,7 +57,10 @@ class User:
         Задаёт имя пользователя, запрещая пустое значение
         """
         if not value or len(value) < MIN_USERNAME_LENGTH:
-            raise ValueError("Имя пользователя не может быть пустым")
+            raise ValueError(
+                f"Имя пользователя должно быть не короче "
+                f"{MIN_USERNAME_LENGTH} символов"
+            )
         self._username = str(value)
 
     @property
@@ -92,7 +96,7 @@ class User:
 
     def change_password(self, new_password: str) -> None:
         """
-        Меняет пароль: генерирует новую соль и сохраняет хеш
+        Меняет пароль, генерирует новую соль и сохраняет хеш
         """
         if len(new_password) < MIN_PASSWORD_LENGTH:
             raise ValueError(
@@ -186,7 +190,9 @@ class Wallet:
             raise ValueError(
                 "Сумма снятия должна быть положительным числом")
         if amount > self._balance:
-            raise ValueError("Не хватает средств на снятие")
+            raise InsufficientFundsError(
+                self._currency_code, self._balance, amount
+            )
         self.balance -= amount
         return self.balance
 
@@ -218,17 +224,11 @@ class Portfolio:
         """
         Возвращает общую стоимость всех кошельков в указанной базовой валюте
         """
-        base = base_currency.strip().upper()
-        if base not in exchange_rates:
-            raise ValueError(f"Неизвестен курс валюты {base}")
-        total = 0.0
-        for wallet in self._wallets.values():
-            if wallet.currency_code not in exchange_rates:
-                raise ValueError(
-                    f"Неизвестен курс валюты {wallet.currency_code}"
-                )
-            total += wallet.balance * exchange_rates[wallet.currency_code]
-        return total / exchange_rates[base]
+        base = utils.validate_currency_code(base_currency)
+        return sum(
+            utils.convert(wallet.balance, wallet.currency_code, base)
+            for wallet in self._wallets.values()
+        )
 
     def get_wallet(self, currency_code: str) -> Wallet:
         """

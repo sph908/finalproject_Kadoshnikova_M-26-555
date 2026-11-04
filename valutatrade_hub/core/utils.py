@@ -1,23 +1,27 @@
-import json
-from pathlib import Path
+from valutatrade_hub.core.currencies import BASE_CURRENCY, exchange_rates, get_currency
+from valutatrade_hub.core.exceptions import ApiRequestError
 
 
-def load_jsondata(
-    filepath: Path, default: list | dict | None = None
-) -> list | dict:
+def validate_currency_code(code: str) -> str:
     """
-    Загрузка данных из JSON-файла, при его отсутствии - значение по умолчанию
+    Проверяет код по справочнику валют и возвращает его в каноническом виде
     """
-    try:
-        with open(filepath, encoding='utf-8') as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {} if default is None else default
+    return get_currency(code).code
 
 
-def save_jsondata(filepath: Path, data: list | dict) -> None:
+def get_exchange_rate(from_code: str, to_code: str = BASE_CURRENCY) -> float:
     """
-    Сохранение данных в JSON-файл
+    Возвращает курс одной валюты к другой по таблице котировок
     """
-    with open(filepath, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
+    source = validate_currency_code(from_code)
+    target = validate_currency_code(to_code)
+    if source not in exchange_rates or target not in exchange_rates:
+        raise ApiRequestError(f"нет котировки для пары {source}→{target}")
+    return exchange_rates[source] / exchange_rates[target]
+
+
+def convert(amount: float, from_code: str, to_code: str = BASE_CURRENCY) -> float:
+    """
+    Переводит сумму из одной валюты в другую
+    """
+    return amount * get_exchange_rate(from_code, to_code)

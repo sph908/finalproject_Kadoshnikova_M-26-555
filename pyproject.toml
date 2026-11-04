@@ -19,3 +19,7 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "N", "UP", "B", "SIM"]
+
+[tool.valutatrade]
+rates_ttl_seconds = 300
+base_currency = "USD"

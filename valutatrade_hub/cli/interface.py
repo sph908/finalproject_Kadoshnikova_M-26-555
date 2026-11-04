@@ -1,4 +1,9 @@
-from valutatrade_hub.core import usecases
+from valutatrade_hub.core import currencies, usecases
+from valutatrade_hub.core.exceptions import (
+    ApiRequestError,
+    CurrencyNotFoundError,
+    InsufficientFundsError,
+)
 
 COMMAND_REGISTER = "register"
 COMMAND_LOGIN = "login"
@@ -8,6 +13,8 @@ COMMAND_SHOW_PORTFOLIO = "show-portfolio"
 COMMAND_GET_RATE = "get-rate"
 COMMAND_EXIT = "exit"
 
+SUPPORTED_CODES = "Поддерживаемые коды валют:"
+RETRY_LATER = "Повторите попытку позже или проверьте подключение к сети."
 PROMPT = "> "
 NOT_LOGGED_IN = "Сначала выполните вход командой login"
 GOODBYE = "До свидания"
@@ -33,6 +40,7 @@ def require(args: dict, name: str) -> str:
     if name not in args:
         raise ValueError(f"Аргумент --{name} обязателен")
     return args[name]
+
 
 def require_amount(args: dict, name: str) -> float:
     """
@@ -70,13 +78,6 @@ def run() -> None:
             elif name == COMMAND_BUY:
                 if current_user is None:
                     raise ValueError(NOT_LOGGED_IN)
-                print(usecases.buy(current_user, ...))
-            elif name == COMMAND_SHOW_PORTFOLIO:
-                if current_user is None:
-                    raise ValueError(NOT_LOGGED_IN)
-            elif name == COMMAND_BUY:
-                if current_user is None:
-                    raise ValueError(NOT_LOGGED_IN)
                 print(usecases.buy(
                     current_user,
                     require(args, "currency"),
@@ -100,5 +101,13 @@ def run() -> None:
                 ))
             else:
                 print(f"Неизвестная команда: {name}")
+        except InsufficientFundsError as error:
+            print(error)
+        except CurrencyNotFoundError as error:
+            print(error)
+            print(f"{SUPPORTED_CODES} {', '.join(currencies.CURRENCIES)}")
+        except ApiRequestError as error:
+            print(error)
+            print(RETRY_LATER)
         except ValueError as error:
             print(error)
