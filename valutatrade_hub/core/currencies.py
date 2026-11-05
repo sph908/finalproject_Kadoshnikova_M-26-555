@@ -6,9 +6,6 @@ MIN_CURRENCY_LENGTH = 2
 MAX_CURRENCY_LENGTH = 5
 BASE_CURRENCY = "USD"
 
-# Заглушка, пока parser_service не подключён
-exchange_rates = {"USD": 1.0, "EUR": 1.07, "CNY": 0.14, "BTC": 59300.0}
-
 
 class Currency(ABC):
     """
@@ -17,7 +14,7 @@ class Currency(ABC):
 
     def __init__(self, name: str, code: str) -> None:
         """
-        Создаёт валюту, проверяя название и код
+        Создает валюту, проверяя название и код
         """
         if not isinstance(name, str) or not name.strip():
             raise ValueError("Название валюты не может быть пустым")
@@ -48,7 +45,7 @@ class FiatCurrency(Currency):
 
     def __init__(self, name: str, code: str, issuing_country: str) -> None:
         """
-        Создаёт фиатную валюту
+        Создает фиатную валюту
         """
         super().__init__(name, code)
         if not isinstance(issuing_country, str) or not issuing_country.strip():
@@ -74,7 +71,7 @@ class CryptoCurrency(Currency):
         self, name: str, code: str, algorithm: str, market_cap: float
     ) -> None:
         """
-        Создаёт криптовалюту с алгоритмом и капитализацией
+        Создает криптовалюту с алгоритмом и капитализацией
         """
         super().__init__(name, code)
         if not isinstance(algorithm, str) or not algorithm.strip():
@@ -104,14 +101,17 @@ CURRENCIES: dict[str, Currency] = {
     "USD": FiatCurrency("US Dollar", "USD", "United States"),
     "EUR": FiatCurrency("Euro", "EUR", "Eurozone"),
     "CNY": FiatCurrency("Chinese Yuan", "CNY", "China"),
+    "GBP": FiatCurrency("British Pound", "GBP", "United Kingdom"),
+    "RUB": FiatCurrency("Russian Ruble", "RUB", "Russia"),
     "BTC": CryptoCurrency("Bitcoin", "BTC", "SHA-256", 1.12e12),
     "ETH": CryptoCurrency("Ethereum", "ETH", "Ethash", 4.2e11),
+    "SOL": CryptoCurrency("Solana", "SOL", "Proof of History", 5.0e10),
 }
 
 
 def get_currency(code: str) -> Currency:
     """
-    Возвращает валюту по её коду
+    Возвращает валюту по ее коду
     """
     if not isinstance(code, str):
         raise CurrencyNotFoundError(str(code))

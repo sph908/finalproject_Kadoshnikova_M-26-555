@@ -2,6 +2,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+from valutatrade_hub.core import utils
 from valutatrade_hub.core.models import Portfolio, Wallet
 from valutatrade_hub.infra import settings
 
@@ -12,7 +13,6 @@ class DatabaseManager:
     """
     # Хранилище одно на всё приложение,
     # пути к файлам читаются из настроек один раз.
-    _instance = None
     _instance = None
 
     def __new__(cls) -> "DatabaseManager":
@@ -103,33 +103,29 @@ class DatabaseManager:
 
     def load_cached_rate(
         self, source: str, target: str
-    ) -> tuple[float, datetime] | None:
+    ) -> tuple[float, str] | None:
         """
-        Возвращает курс и время обновления из кеша, если он ещё не устарел
+        Возвращает курс и время обновления, если он ещё не устарел
         """
-        cache = self._read(self._rates_file, {})
-        saved = cache.get(f"{source}/{target}")
-        if saved is None:
+        moment = self.load_snapshot().get("last_refresh")
+        if moment is None:
             return None
 
-        updated_at = datetime.fromisoformat(saved["updated_at"])
-        age = (datetime.now() - updated_at).total_seconds()
+        updated_at = datetime.fromisoformat(moment)
+        age = (datetime.now(updated_at.tzinfo) - updated_at).total_seconds()
         if age > settings.RATE_TTL_SECONDS:
             return None
-        return saved["rate"], updated_at
 
-    def save_cached_rate(
-        self, source: str, target: str, rate: float, updated_at: datetime
-    ) -> None:
+        rates = utils.load_rates()
+        if source not in rates or target not in rates:
+            return None
+        return rates[source] / rates[target], moment
+
+    def load_snapshot(self) -> dict:
         """
-        Записывает курс в локальный кеш rates.json
+        Возвращает весь снимок курсов из rates.json
         """
-        cache = self._read(self._rates_file, {})
-        cache[f"{source}/{target}"] = {
-            "rate": rate,
-            "updated_at": updated_at.isoformat(timespec="seconds"),
-        }
-        self._write(self._rates_file, cache)
+        return self._read(self._rates_file, {})
 
 
 DATABASE = DatabaseManager()

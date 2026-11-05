@@ -1,20 +1,38 @@
 from datetime import datetime
 
+from prettytable import PrettyTable
+
 from valutatrade_hub.core import utils
-from valutatrade_hub.core.currencies import BASE_CURRENCY
-from valutatrade_hub.core.exceptions import InsufficientFundsError
+from valutatrade_hub.core.currencies import (
+    BASE_CURRENCY,
+    CURRENCIES,
+    CryptoCurrency,
+)
+from valutatrade_hub.core.exceptions import (
+    ApiRequestError,
+    InsufficientFundsError,
+)
 from valutatrade_hub.core.models import Portfolio, User
 from valutatrade_hub.decorators import log_action
 from valutatrade_hub.infra import settings
 from valutatrade_hub.infra.database import DATABASE
+from valutatrade_hub.parser_service.updater import RatesUpdater
 
-SEPARATOR = "-" * 33
+CURRENCY_COLUMN = "Валюта"
+BALANCE_COLUMN = "Баланс"
+PAIR_COLUMN = "Пара"
+SOURCE_COLUMN = "Источник"
+UNKNOWN_SOURCE = "—"
+CACHE_EMPTY = (
+    "Локальный кеш курсов пуст. "
+    "Выполните 'update-rates', чтобы загрузить данные."
+)
 
 
 @log_action("REGISTER")
 def register(username: str, password: str) -> str:
     """
-    Создаёт нового пользователя и пустой портфель для него
+    Создает нового пользователя и пустой портфель для него
     """
     users = DATABASE.load_users()
     if any(saved["username"] == username for saved in users):
@@ -25,11 +43,9 @@ def register(username: str, password: str) -> str:
     user.change_password(password)
 
     DATABASE.save_user({
-        "user_id": user.user_id,
-        "username": user.username,
+        **user.get_user_info(),
         "hashed_password": user.hashed_password,
         "salt": user.salt,
-        "registration_date": user.registration_date.isoformat(),
     })
     DATABASE.save_portfolio(Portfolio(user.user_id, {}))
 
@@ -64,7 +80,7 @@ def login(username: str, password: str) -> User:
 
 def show_portfolio(user: User, base_currency: str | None = None) -> str:
     """
-    Возвращает отчёт по кошелькам пользователя в указанной базовой валюте
+    Возвращает отчет по кошелькам пользователя в указанной базовой валюте
     """
     base = utils.validate_currency_code(
         base_currency or settings.SETTINGS.get("base_currency")
@@ -74,24 +90,32 @@ def show_portfolio(user: User, base_currency: str | None = None) -> str:
     if not portfolio.wallets:
         return f"Портфель пользователя '{user.username}' пуст"
 
-    lines = [f"Портфель пользователя '{user.username}' (база: {base}):"]
-    for code, wallet in portfolio.wallets.items():
-        value = utils.convert(wallet.balance, code, base)
+    value_column = f"Оценка в {base}"
+    table = PrettyTable([CURRENCY_COLUMN, BALANCE_COLUMN, value_column])
+    table.align[CURRENCY_COLUMN] = "l"
+    table.align[BALANCE_COLUMN] = "r"
+    table.align[value_column] = "r"
+    for wallet in portfolio.wallets.values():
+        info = wallet.get_balance_info()
         balance = (
-            f"{wallet.balance:,.4f}"
-            if 0 < wallet.balance < 1
-            else f"{wallet.balance:,.2f}"
+            f"{info['balance']:,.4f}"
+            if 0 < info["balance"] < 1
+            else f"{info['balance']:,.2f}"
         )
-        lines.append(f"- {code}: {balance} → {value:,.2f} {base}")
-    lines.append(SEPARATOR)
-    lines.append(f"ИТОГО: {portfolio.get_total_value(base):,.2f} {base}")
-    return "\n".join(lines)
+        value = utils.convert(info["balance"], info["currency"], base)
+        table.add_row([info["currency"], balance, f"{value:,.2f}"])
+
+    return "\n".join([
+        f"Портфель пользователя '{user.username}' (база: {base}):",
+        str(table),
+        f"ИТОГО: {portfolio.get_total_value(base):,.2f} {base}",
+    ])
 
 
 @log_action("BUY", verbose=True)
 def buy(user: User, currency_code: str, amount: float) -> str:
     """
-    Покупает валюту и зачисляет её на кошелёк пользователя
+    Покупает валюту и зачисляет ее на кошелек пользователя
     """
     if amount <= 0:
         raise ValueError("'amount' должен быть положительным числом")
@@ -120,7 +144,7 @@ def buy(user: User, currency_code: str, amount: float) -> str:
 @log_action("SELL", verbose=True)
 def sell(user: User, currency_code: str, amount: float) -> str:
     """
-    Продаёт валюту и списывает её с кошелька пользователя
+    Продает валюту и списывает ее с кошелька пользователя
     """
     if amount <= 0:
         raise ValueError("'amount' должен быть положительным числом")
@@ -155,6 +179,65 @@ def format_rate(rate: float) -> str:
     return f"{rate:.2f}"
 
 
+def show_rates(
+    currency: str | None = None,
+    top: int | None = None,
+    base: str | None = None,
+) -> str:
+    """
+    Показывает курсы из локального кеша с отбором по валюте, базе или топу
+    """
+    snapshot = DATABASE.load_snapshot()
+    pairs = snapshot.get("pairs", {})
+    if not pairs:
+        raise ValueError(CACHE_EMPTY)
+
+    quotes = {}
+    sources = {}
+    for name, data in pairs.items():
+        code = name.partition("_")[0]
+        quotes[code] = data["rate"]
+        sources[code] = data["source"]
+
+    target = utils.validate_currency_code(base) if base else BASE_CURRENCY
+    divisor = 1.0
+    if target != BASE_CURRENCY:
+        if target not in quotes:
+            raise ValueError(f"Курс для '{target}' не найден в кеше")
+        divisor = quotes[target]
+        quotes[BASE_CURRENCY] = 1.0
+        sources.setdefault(BASE_CURRENCY, UNKNOWN_SOURCE)
+
+    if currency is not None:
+        code = utils.validate_currency_code(currency)
+        if code not in quotes:
+            raise ValueError(f"Курс для '{code}' не найден в кеше")
+        selected = [code]
+    elif top is not None:
+        crypto = [
+            code for code in quotes
+            if isinstance(CURRENCIES[code], CryptoCurrency)
+        ]
+        selected = sorted(crypto, key=lambda code: quotes[code], reverse=True)[:top]
+    else:
+        selected = sorted(code for code in quotes if code != target)
+
+    rate_column = f"Курс в {target}"
+    table = PrettyTable([PAIR_COLUMN, rate_column, SOURCE_COLUMN])
+    table.align[PAIR_COLUMN] = "l"
+    table.align[rate_column] = "r"
+    table.align[SOURCE_COLUMN] = "l"
+    for code in selected:
+        table.add_row([
+            f"{code}_{target}",
+            format_rate(quotes[code] / divisor),
+            sources.get(code, UNKNOWN_SOURCE),
+        ])
+
+    moment = snapshot.get("last_refresh", "неизвестно")
+    return f"Курсы из кеша (обновлено: {moment}):\n{table}"
+
+
 def get_rate(from_currency: str, to_currency: str) -> str:
     """
     Возвращает курс одной валюты к другой с отметкой времени обновления
@@ -164,13 +247,13 @@ def get_rate(from_currency: str, to_currency: str) -> str:
 
     cached = DATABASE.load_cached_rate(source, target)
     if cached is None:
-        rate = utils.get_exchange_rate(source, target)
-        updated_at = datetime.now()
-        DATABASE.save_cached_rate(source, target, rate, updated_at)
-    else:
-        rate, updated_at = cached
+        RatesUpdater().run_update()
+        cached = DATABASE.load_cached_rate(source, target)
+    if cached is None:
+        raise ApiRequestError(f"нет котировки для пары {source}→{target}")
 
-    moment = updated_at.isoformat(sep=" ", timespec="seconds")
+    rate, moment = cached
+
     return "\n".join([
         f"Курс {source}→{target}: {format_rate(rate)} (обновлено: {moment})",
         f"Обратный курс {target}→{source}: {format_rate(1 / rate)}",

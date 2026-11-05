@@ -1,4 +1,5 @@
 import hashlib
+import math
 import secrets
 from datetime import datetime
 
@@ -17,7 +18,7 @@ SALT_BYTES = 8
 
 class User:
     """
-    Пользователь системы: хранит учётные данные и проверяет пароль
+    Пользователь системы: хранит учетные данные и проверяет пароль
     """
 
     def __init__(
@@ -29,7 +30,7 @@ class User:
         registration_date: datetime,
     ) -> None:
         """
-        Создаёт пользователя из уже сохранённых данных
+        Создает пользователя из уже сохраненных данных
         """
         self._user_id: int = user_id
         self.username = username
@@ -54,7 +55,7 @@ class User:
     @username.setter
     def username(self, value: str) -> None:
         """
-        Задаёт имя пользователя, запрещая пустое значение
+        Задает имя пользователя, запрещая пустое значение
         """
         if not value or len(value) < MIN_USERNAME_LENGTH:
             raise ValueError(
@@ -109,7 +110,7 @@ class User:
 
     def verify_password(self, password: str) -> bool:
         """
-        Проверяет, совпадает ли введённый пароль с сохранённым
+        Проверяет, совпадает ли введенный пароль с сохраненным
         """
         candidate = hashlib.sha256(
             (password + self._salt).encode("utf-8")
@@ -124,7 +125,7 @@ class Wallet:
 
     def __init__(self, currency_code: str, balance: float = 0.0) -> None:
         """
-        Создаёт кошелёк с указанной валютой и начальным балансом
+        Создает кошелек с указанной валютой и начальным балансом
         """
         if not isinstance(currency_code, str):
             raise ValueError("Код валюты должен быть строкой")
@@ -141,7 +142,7 @@ class Wallet:
         """
         Пополняет баланс и возвращает новое значение
         """
-        if amount <= 0:
+        if not math.isfinite(amount) or amount <= 0:
             raise ValueError(
                 "Для пополнения баланса должно быть указано положительное число"
             )
@@ -178,6 +179,8 @@ class Wallet:
         """
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ValueError("Баланс должен быть числом")
+        if not math.isfinite(value):
+            raise ValueError("Баланс должен быть числом")
         if value < 0:
             raise ValueError("Баланс не может быть отрицательным")
         self._balance = float(value)
@@ -186,7 +189,7 @@ class Wallet:
         """
         Снятие средств со счета без превышения баланса
         """
-        if amount <= 0:
+        if not math.isfinite(amount) or amount <= 0:
             raise ValueError(
                 "Сумма снятия должна быть положительным числом")
         if amount > self._balance:
@@ -204,14 +207,14 @@ class Portfolio:
 
     def __init__(self, user_id: int, wallets: dict[str, Wallet]) -> None:
         """
-        Создаёт профиль пользователя со всеми его кошельками
+        Создает профиль пользователя со всеми его кошельками
         """
         self._user_id: int = user_id
         self._wallets = dict(wallets)
 
     def add_currency(self, currency_code: str) -> None:
         """
-        Создаёт кошелёк новой валюты и добавляет его в профиль
+        Создает кошелек новой валюты и добавляет его в профиль
         """
         wallet = Wallet(currency_code)
         if wallet.currency_code in self._wallets:
@@ -232,7 +235,7 @@ class Portfolio:
 
     def get_wallet(self, currency_code: str) -> Wallet:
         """
-        Возвращает кошелёк пользователя по коду валюты
+        Возвращает кошелек пользователя по коду валюты
         """
         code = currency_code.strip().upper()
         if code not in self._wallets:

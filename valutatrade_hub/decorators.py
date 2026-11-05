@@ -1,7 +1,9 @@
 from functools import wraps
 from inspect import signature
 
-from valutatrade_hub.core.currencies import BASE_CURRENCY, exchange_rates
+from valutatrade_hub.core import utils
+from valutatrade_hub.core.currencies import BASE_CURRENCY
+from valutatrade_hub.core.exceptions import ValutatradeError
 from valutatrade_hub.infra.database import DATABASE
 from valutatrade_hub.logging_config import setup_logging
 
@@ -10,11 +12,11 @@ logger = setup_logging()
 
 def log_action(action: str, verbose: bool = False):
     """
-    Записывает в лог вызов функции, её аргументы и результат
+    Записывает в лог вызов функции, ее аргументы и результат
     """
     def decorator(func):
         """
-        Оборачивает функцию сценария, не меняя её поведения
+        Оборачивает функцию сценария, не меняя ее поведения
         """
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -79,10 +81,14 @@ def _format_fields(action: str, fields: dict) -> str:
     if fields["amount"] is not None:
         parts.append(f"amount={fields['amount']:.4f}")
 
-    if currency in exchange_rates:
-        rate = exchange_rates[currency] / exchange_rates[BASE_CURRENCY]
-        parts.append(f"rate={rate:.2f}")
-        parts.append(f"base={BASE_CURRENCY!r}")
+    if currency is not None:
+        try:
+            rate = utils.get_exchange_rate(currency)
+        except ValutatradeError:
+            rate = None
+        if rate is not None:
+            parts.append(f"rate={rate:.2f}")
+            parts.append(f"base={BASE_CURRENCY!r}")
     return " ".join(parts)
 
 
