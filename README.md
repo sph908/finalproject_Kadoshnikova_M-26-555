@@ -199,6 +199,4 @@ uv run ruff check .
 
 ## Демонстрация работы
  
- asciinema - https://asciinema.org/a/1271228
-
- [![asciicast](https://asciinema.org/a/1271228.svg)](https://asciinema.org/a/1271228)
+[Запись работы в asciinema](https://asciinema.org/a/BrbMW6mw8x6DXmpd)
