@@ -172,7 +172,7 @@ def sell(user: User, currency_code: str, amount: float) -> str:
 
 def format_rate(rate: float) -> str:
     """
-    Печатает курс
+    Приводит курс к формату до 8-ми знаков, если значение < 1
     """
     if 0 < rate < 1:
         return f"{rate:.8f}"
