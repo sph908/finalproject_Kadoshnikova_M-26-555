@@ -196,3 +196,9 @@ INFO 2026-11-05T12:12:01 SELL user='alice' currency='ETH' amount=1.0000 result=E
 ```bash
 uv run ruff check .
 ```
+
+## Демонстрация работы
+ 
+ asciinema - https://asciinema.org/a/1271228
+
+ [![asciicast](https://asciinema.org/a/1271228.svg)](https://asciinema.org/a/1271228)
